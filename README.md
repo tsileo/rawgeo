@@ -8,5 +8,5 @@ Building block for building geospatial indexes using geohashes.
 
 - Index is stored in a [kv](https://github.com/cznic/kv) file.
 - Find nearest neighbors from `lag,lng` sorted by distance.
-- Don't designed to store you data, but you attach a `map[string]interface{}` for lightweight use case.
+- Don't designed to store data (should be handled by another component), but you can attach a `map[string]interface{}` if really necessary.
 

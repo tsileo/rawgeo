@@ -126,7 +126,7 @@ func (db *DB) Find(name string, lat, long float64, precision int) ([]*IndexEntry
 	res := []*IndexEntry{}
 	for _, geohash := range append(geohash.CalculateAllAdjacent(gh), gh) {
 		subres, err := db.findPrefix(name, geohash)
-		fmt.Printf("adj=%s / %d\n", geohash, len(subres))
+		// fmt.Printf("adj=%s / %d\n", geohash, len(subres))
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +153,7 @@ func (db *DB) findPrefix(name, geoPrefix string) ([]*IndexEntry, error) {
 	i := 0
 	for {
 		k, _, err := enum.Next()
-		fmt.Printf("iter: k=%s err=%v\n", k, err)
+		// fmt.Printf("iter: k=%s err=%v\n", k, err)
 		if err == io.EOF {
 			break
 		}
