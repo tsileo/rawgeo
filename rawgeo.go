@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/TomiHiltunen/geohash-golang"
 	"github.com/cznic/kv"
-	"github.com/paulmach/go.geo"
 )
 
 // XXX(tsileo): encode the index entry (lat/long) as binary instead of JSON?
@@ -23,7 +23,10 @@ var (
 	ErrMissingID      = errors.New("missing ID")
 	ErrInvalidLatLong = errors.New("invalid lat/long")
 )
+
 var IndexEntryFmt = "index:%s:%s:%s" // index:{name}:{geohash}:{id}
+
+var earthRadius = 6378137.0 // As defined by WGS 84
 
 type IndexEntry struct {
 	// Geohash enough? or we still store the exact data inputed?
@@ -39,8 +42,17 @@ type IndexEntry struct {
 	Distance float64 `json"-"` // Computed query time
 }
 
-func (ie *IndexEntry) Point() *geo.Point {
-	return geo.NewPointFromLatLng(ie.Lat, ie.Long)
+// Implements the equirectangular approximation from www.movable-type.co.uk/scripts/latlong.html
+// (Pythagoras’ theorem on an equirectangular projection)
+// var x = (λ2-λ1) * Math.cos((φ1+φ2)/2);
+// var y = (φ2-φ1);
+// var d = Math.sqrt(x*x + y*y) * R;
+//
+// Returns the approximate distance in meters
+func (ie *IndexEntry) DistanceFrom(ie2 *IndexEntry) float64 {
+	x := (ie2.Long - ie.Long) * math.Pi / 180 * math.Cos((ie2.Lat+ie.Lat)*math.Pi/360)
+	y := (ie2.Lat - ie.Lat) * math.Pi / 180
+	return math.Sqrt(x*x+y*y) * earthRadius
 }
 
 type byDistance []*IndexEntry
@@ -120,7 +132,10 @@ func (db *DB) get(key []byte) (*IndexEntry, error) {
 
 func (db *DB) Find(name string, lat, long float64, precision int) ([]*IndexEntry, error) {
 	// XXX(tsileo): make precision optional
-	refPoint := geo.NewPointFromLatLng(lat, long)
+	refPoint := &IndexEntry{
+		Lat:  lat,
+		Long: long,
+	}
 	gh := geohash.EncodeWithPrecision(lat, long, precision)
 
 	res := []*IndexEntry{}
@@ -131,8 +146,8 @@ func (db *DB) Find(name string, lat, long float64, precision int) ([]*IndexEntry
 			return nil, err
 		}
 		for _, entry := range subres {
-			// Compute the distance from the query reference using the Haversine formula
-			entry.Distance = entry.Point().GeoDistanceFrom(refPoint)
+			// Compute the distance from the query reference
+			entry.Distance = entry.DistanceFrom(refPoint)
 			res = append(res, entry)
 		}
 	}
