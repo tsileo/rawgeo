@@ -2,7 +2,6 @@ package rawgeo
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +15,7 @@ import (
 	"github.com/cznic/kv"
 )
 
-// XXX(tsileo): encode the index entry (lat/long) as binary instead of JSON?
+// TODO(tsileo): implement remove
 
 var (
 	ErrNotFound       = errors.New("key does not exist")
@@ -24,22 +23,32 @@ var (
 	ErrInvalidLatLong = errors.New("invalid lat/long")
 )
 
-var IndexEntryFmt = "index:%s:%s:%s" // index:{name}:{geohash}:{id}
+var (
+	indexKeyFmt = "%s:%s"   // {geohash}:{id}
+	earthRadius = 6378137.0 // As defined by WGS 84
+)
 
-var earthRadius = 6378137.0 // As defined by WGS 84
+type Point struct {
+	ID      string
+	Geohash string
 
-type IndexEntry struct {
-	// Geohash enough? or we still store the exact data inputed?
-	Lat  float64 `json:"lat"`
-	Long float64 `json:"long"`
+	// These fields are computed query time and will be ignored when indexing
+	Distance float64
+	Lat, Lng float64
+}
 
-	ID      string `json:"id"`
-	Geohash string `json:"-"` // Don't store it as we can recompute it from `Lat`/`Long`
+func decodeLatLong(p *Point) {
+	latlng := geohash.Decode(p.Geohash).Center()
+	p.Lat, p.Lng = latlng.Lat(), latlng.Lng()
+}
 
-	// Optional user-supplied meta data about the entry
-	Data map[string]interface{} `json:"data,omitempty"`
-
-	Distance float64 `json"-"` // Computed query time
+func NewPointFromGeohash(id, geohash string) *Point {
+	p := &Point{
+		ID:      id,
+		Geohash: geohash,
+	}
+	decodeLatLong(p)
+	return p
 }
 
 // Implements the equirectangular approximation from www.movable-type.co.uk/scripts/latlong.html
@@ -49,26 +58,26 @@ type IndexEntry struct {
 // var d = Math.sqrt(x*x + y*y) * R;
 //
 // Returns the approximate distance in meters
-func (ie *IndexEntry) DistanceFrom(ie2 *IndexEntry) float64 {
-	x := (ie2.Long - ie.Long) * math.Pi / 180 * math.Cos((ie2.Lat+ie.Lat)*math.Pi/360)
-	y := (ie2.Lat - ie.Lat) * math.Pi / 180
+func (p *Point) DistanceFrom(point *Point) float64 {
+	x := (point.Lng - p.Lng) * math.Pi / 180 * math.Cos((point.Lat+p.Lat)*math.Pi/360)
+	y := (point.Lat - p.Lat) * math.Pi / 180
 	return math.Sqrt(x*x+y*y) * earthRadius
 }
 
-type byDistance []*IndexEntry
+type byDistance []*Point
 
 func (s byDistance) Len() int           { return len(s) }
 func (s byDistance) Less(i, j int) bool { return s[i].Distance < s[j].Distance }
 func (s byDistance) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
-type DB struct {
+type RawGeo struct {
 	db   *kv.DB
 	path string
-	mu   *sync.Mutex
+	mu   sync.Mutex
 }
 
-// New creates a new database.
-func New(path string) (*DB, error) {
+// New initializes/loads a `RawGeo` index at the given path
+func New(path string) (*RawGeo, error) {
 	createOpen := kv.Open
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		createOpen = kv.Create
@@ -77,113 +86,105 @@ func New(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DB{
+	return &RawGeo{
 		db:   kvdb,
 		path: path,
-		mu:   new(sync.Mutex),
 	}, nil
 }
 
-func (db *DB) Close() error {
-	return db.db.Close()
+// Close gracefully closes the opened index
+func (rg *RawGeo) Close() error {
+	return rg.db.Close()
 }
 
-func (db *DB) Destroy() error {
-	if db.path != "" {
-		db.Close()
-		return os.RemoveAll(db.path)
+// Destroy will try to remove the index file
+func (rg *RawGeo) Destroy() error {
+	if rg.path != "" {
+		rg.Close()
+		return os.RemoveAll(rg.path)
 	}
 	return nil
 }
 
 // Put index the given entry in the given index
-func (db *DB) Put(name string, entry *IndexEntry) error {
-	// Compute the geohash if needed
-	if entry.Geohash == "" {
-		entry.Geohash = geohash.Encode(entry.Lat, entry.Long)
-	}
-	if entry.ID == "" {
-		return ErrMissingID
-	}
-	if entry.Lat == 0 || entry.Long == 0 {
+// (you have to cared about duplicate IDs)
+func (rg *RawGeo) Index(point *Point) error {
+	// Ensure the entry contains a latitude and a longitude
+	if point.Lat == 0 || point.Lng == 0 {
 		return ErrInvalidLatLong
 	}
-	js, err := json.Marshal(entry)
-	if err != nil {
-		return err
+	// Compute the Geohash if needed
+	if point.Geohash == "" {
+		point.Geohash = geohash.Encode(point.Lat, point.Lng)
 	}
-	if err := db.db.Set([]byte(fmt.Sprintf(IndexEntryFmt, name, entry.Geohash, entry.ID)), js); err != nil {
+	if point.ID == "" {
+		return ErrMissingID
+	}
+	if err := rg.db.Set([]byte(fmt.Sprintf(indexKeyFmt, point.Geohash, point.ID)), nil); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (db *DB) get(key []byte) (*IndexEntry, error) {
-	entry := &IndexEntry{}
-	data, err := db.db.Get(nil, key)
-	if err != nil {
-		return nil, err
+// Query will returns all the points found sorted by distance to the query
+func (rg *RawGeo) Query(lat, lng float64, precision int) ([]*Point, error) {
+	// XXX(tsileo): make precision optional or
+	// handle a radius parameters (radius to precision func needed)
+	refPoint := &Point{
+		Lat: lat,
+		Lng: lng,
 	}
-	if err := json.Unmarshal(data, entry); err != nil {
-		return nil, err
-	}
-	return entry, nil
-}
+	gh := geohash.EncodeWithPrecision(lat, lng, precision)
 
-func (db *DB) Find(name string, lat, long float64, precision int) ([]*IndexEntry, error) {
-	// XXX(tsileo): make precision optional
-	refPoint := &IndexEntry{
-		Lat:  lat,
-		Long: long,
-	}
-	gh := geohash.EncodeWithPrecision(lat, long, precision)
+	res := []*Point{}
 
-	res := []*IndexEntry{}
+	// Search in the given geohash box, along with all the adjacent boxes
 	for _, geohash := range append(geohash.CalculateAllAdjacent(gh), gh) {
-		subres, err := db.findPrefix(name, geohash)
+		subres, err := rg.findPrefix(geohash)
 		// fmt.Printf("adj=%s / %d\n", geohash, len(subres))
 		if err != nil {
 			return nil, err
 		}
-		for _, entry := range subres {
+		for _, point := range subres {
 			// Compute the distance from the query reference
-			entry.Distance = entry.DistanceFrom(refPoint)
-			res = append(res, entry)
+			point.Distance = refPoint.DistanceFrom(point)
+			res = append(res, point)
 		}
 	}
 	sort.Sort(byDistance(res))
 	return res, nil
 }
 
-func (db *DB) findPrefix(name, geoPrefix string) ([]*IndexEntry, error) {
+func (rg *RawGeo) findPrefix(geoPrefix string) ([]*Point, error) {
 	var limit int
-	res := []*IndexEntry{}
-	start := fmt.Sprintf("index:%s:%s", name, geoPrefix)
-	enum, _, err := db.db.Seek([]byte(start))
+	points := []*Point{}
+	enum, _, err := rg.db.Seek([]byte(geoPrefix))
 	if err != nil {
 		return nil, err
 	}
-	// TODO(tsileo): fix the endBytes
-	endBytes := []byte(fmt.Sprintf("index:%s:%s", name, "\xff"))
+	// TODO(tsileo): check/fix the endBytes
+	endBytes := []byte("\xff")
 	i := 0
 	for {
 		k, _, err := enum.Next()
-		// fmt.Printf("iter: k=%s err=%v\n", k, err)
+		sk := string(k)
+		fmt.Printf("iter: k=%s err=%v\n", k, err)
 		if err == io.EOF {
 			break
 		}
-		if !strings.HasPrefix(string(k), start) {
+		if !strings.HasPrefix(sk, geoPrefix) {
+			fmt.Printf("nope k=%s, start=%s\n", k, geoPrefix)
 			break
 		}
 		if bytes.Compare(k, endBytes) > 0 || (limit != 0 && i > limit) {
-			return res, nil
+			fmt.Printf("greater")
+			return points, nil
 		}
-		kv, err := db.get(k)
-		if err != nil {
-			return nil, err
-		}
-		res = append(res, kv)
+		parts := strings.SplitN(sk, ":", 2)
+		p := NewPointFromGeohash(parts[1], parts[0])
+		fmt.Printf("iter2=%+v\n", p)
+		points = append(points, p)
 		i++
 	}
-	return res, nil
+	return points, nil
 }

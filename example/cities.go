@@ -6,11 +6,12 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/tsileo/rawgeo"
 )
 
-func parseLocation(file string, db *rawgeo.DB) error {
+func parseLocation(file string, db *rawgeo.RawGeo) error {
 	f, err := os.Open(file)
 	if err != nil {
 		return err
@@ -40,17 +41,17 @@ func parseLocation(file string, db *rawgeo.DB) error {
 		if err != nil {
 			return err
 		}
-		ie := &rawgeo.IndexEntry{
-			ID:   fmt.Sprintf("%s-%s", row[0], row[1]),
-			Lat:  lat,
-			Long: lon,
-			Data: map[string]interface{}{
-				"city":    row[1],
-				"country": row[0],
-				"region":  row[3],
-			},
+		p := &rawgeo.Point{
+			ID:  fmt.Sprintf("%s-%s", row[0], row[1]),
+			Lat: lat,
+			Lng: lon,
+			// Data: map[string]interface{}{
+			// 	"city":    row[1],
+			// 	"country": row[0],
+			// 	"region":  row[3],
+			// },
 		}
-		if err := db.Put("cities", ie); err != nil {
+		if err := db.Index(p); err != nil {
 			if err == rawgeo.ErrInvalidLatLong {
 				continue
 			}
@@ -61,8 +62,8 @@ func parseLocation(file string, db *rawgeo.DB) error {
 
 }
 
-func search(lat, lon float64, db *rawgeo.DB) ([]*rawgeo.IndexEntry, error) {
-	return db.Find("cities", lat, lon, 6)
+func search(lat, lon float64, db *rawgeo.RawGeo) ([]*rawgeo.Point, error) {
+	return db.Query(lat, lon, 8)
 }
 
 func main() {
@@ -74,7 +75,10 @@ func main() {
 	// if err := parseLocation("worldcitiespop.txt", db); err != nil {
 	// 	panic(err)
 	// }
+	n := time.Now()
 	res, err := search(30.26715, -97.74306, db)
+	took := time.Since(n)
+	fmt.Printf("took %v\n", took)
 	if res != nil && len(res) > 0 {
 		fmt.Printf("res=%+v | %+v\nerr=%s", res[0], res[len(res)-1], err)
 	} else {
