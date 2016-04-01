@@ -13,11 +13,13 @@ import (
 
 	"github.com/TomiHiltunen/geohash-golang"
 	"github.com/cznic/kv"
+	log "gopkg.in/inconshreveable/log15.v2"
 )
 
 // TODO(tsileo): implement remove
 
 var (
+	Log               = log.New()
 	ErrNotFound       = errors.New("key does not exist")
 	ErrMissingID      = errors.New("missing ID")
 	ErrInvalidLatLong = errors.New("invalid lat/long")
@@ -27,6 +29,10 @@ var (
 	indexKeyFmt = "%s:%s"   // {geohash}:{id}
 	earthRadius = 6378137.0 // As defined by WGS 84
 )
+
+func init() {
+	Log.SetHandler(log.DiscardHandler())
+}
 
 type Point struct {
 	ID      string
@@ -53,9 +59,6 @@ func NewPointFromGeohash(id, geohash string) *Point {
 
 // Implements the equirectangular approximation from www.movable-type.co.uk/scripts/latlong.html
 // (Pythagoras’ theorem on an equirectangular projection)
-// var x = (λ2-λ1) * Math.cos((φ1+φ2)/2);
-// var y = (φ2-φ1);
-// var d = Math.sqrt(x*x + y*y) * R;
 //
 // Returns the approximate distance in meters
 func (p *Point) DistanceFrom(point *Point) float64 {
@@ -74,6 +77,7 @@ type RawGeo struct {
 	db   *kv.DB
 	path string
 	mu   sync.Mutex
+	log  log.Logger
 }
 
 // New initializes/loads a `RawGeo` index at the given path
@@ -89,6 +93,7 @@ func New(path string) (*RawGeo, error) {
 	return &RawGeo{
 		db:   kvdb,
 		path: path,
+		log:  Log.New("path", path),
 	}, nil
 }
 
@@ -126,28 +131,38 @@ func (rg *RawGeo) Index(point *Point) error {
 	return nil
 }
 
-// Query will returns all the points found sorted by distance to the query
-func (rg *RawGeo) Query(lat, lng float64, precision int) ([]*Point, error) {
+// Query will returns all the points found in the given radius (in meters) sorted by distance to the query
+func (rg *RawGeo) Query(lat, lng, radius float64) ([]*Point, error) {
 	// XXX(tsileo): make precision optional or
 	// handle a radius parameters (radius to precision func needed)
+	qlog := rg.log.New("lat", lat, "lng", lng, "radius", radius)
+	qlog.Debug("new query")
 	refPoint := &Point{
 		Lat: lat,
 		Lng: lng,
 	}
+	precision := radiusToPrecision(radius)
+	qlog.Debug("converted radius to precision", "radius", radius, "precision", precision)
 	gh := geohash.EncodeWithPrecision(lat, lng, precision)
+	qlog.Debug("query geohash", "geohash", gh)
 
 	res := []*Point{}
 
-	// Search in the given geohash box, along with all the adjacent boxes
+	// Search in the given geohash box, along with all the 8 adjacent boxes
 	for _, geohash := range append(geohash.CalculateAllAdjacent(gh), gh) {
 		subres, err := rg.findPrefix(geohash)
-		// fmt.Printf("adj=%s / %d\n", geohash, len(subres))
+		qlog.Debug("new subquery", "geohash", geohash, "cnt", len(subres))
 		if err != nil {
 			return nil, err
 		}
 		for _, point := range subres {
-			// Compute the distance from the query reference
+			// Compute the distance from the reference point (i.e. the query)
 			point.Distance = refPoint.DistanceFrom(point)
+			// Since the geohashes window is not a radius, we still need to check
+			// if the point is located within the given radius.
+			if point.Distance > radius {
+				continue
+			}
 			res = append(res, point)
 		}
 	}
@@ -168,23 +183,48 @@ func (rg *RawGeo) findPrefix(geoPrefix string) ([]*Point, error) {
 	for {
 		k, _, err := enum.Next()
 		sk := string(k)
-		fmt.Printf("iter: k=%s err=%v\n", k, err)
 		if err == io.EOF {
 			break
 		}
 		if !strings.HasPrefix(sk, geoPrefix) {
-			fmt.Printf("nope k=%s, start=%s\n", k, geoPrefix)
 			break
 		}
 		if bytes.Compare(k, endBytes) > 0 || (limit != 0 && i > limit) {
-			fmt.Printf("greater")
 			return points, nil
 		}
 		parts := strings.SplitN(sk, ":", 2)
 		p := NewPointFromGeohash(parts[1], parts[0])
-		fmt.Printf("iter2=%+v\n", p)
 		points = append(points, p)
 		i++
 	}
 	return points, nil
+}
+
+// Data comes from http://www.movable-type.co.uk/scripts/geohash.html
+var geoPrecision = []struct {
+	radius    float64 // in meters
+	precision int     // Geohash precision
+}{
+	{0.074, 11},
+	{0.6, 10},
+	{2.4, 9},
+	{19, 8},
+	{76, 7},
+	{610, 6},
+	{2400, 5},
+	{20000, 4},
+	{78000, 3},
+	{630000, 2},
+	{2500000, 1},
+}
+
+// Convert radius meters to Geohash precision
+func radiusToPrecision(r float64) int {
+	for _, gp := range geoPrecision {
+		if r <= gp.radius {
+			// fmt.Printf("radToPrec r=%f, gp=%+v\n", r, gp)
+			return gp.precision
+		}
+	}
+	return 2
 }
