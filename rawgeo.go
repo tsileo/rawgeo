@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/TomiHiltunen/geohash-golang"
 	"github.com/cznic/kv"
@@ -133,8 +134,7 @@ func (rg *RawGeo) Index(point *Point) error {
 
 // Query will returns all the points found in the given radius (in meters) sorted by distance to the query
 func (rg *RawGeo) Query(lat, lng, radius float64) ([]*Point, error) {
-	// XXX(tsileo): make precision optional or
-	// handle a radius parameters (radius to precision func needed)
+	start := time.Now()
 	qlog := rg.log.New("lat", lat, "lng", lng, "radius", radius)
 	qlog.Debug("new query")
 	refPoint := &Point{
@@ -167,6 +167,7 @@ func (rg *RawGeo) Query(lat, lng, radius float64) ([]*Point, error) {
 		}
 	}
 	sort.Sort(byDistance(res))
+	qlog.Debug("query took", "duration", time.Since(start))
 	return res, nil
 }
 
@@ -222,7 +223,6 @@ var geoPrecision = []struct {
 func radiusToPrecision(r float64) int {
 	for _, gp := range geoPrecision {
 		if r <= gp.radius {
-			// fmt.Printf("radToPrec r=%f, gp=%+v\n", r, gp)
 			return gp.precision
 		}
 	}
