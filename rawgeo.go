@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -94,7 +95,7 @@ func New(path string) (*RawGeo, error) {
 	return &RawGeo{
 		db:   kvdb,
 		path: path,
-		log:  Log.New("path", path),
+		log:  Log.New("path", filepath.Base(path)),
 	}, nil
 }
 
@@ -129,6 +130,7 @@ func (rg *RawGeo) Index(point *Point) error {
 	if err := rg.db.Set([]byte(fmt.Sprintf(indexKeyFmt, point.Geohash, point.ID)), nil); err != nil {
 		return err
 	}
+	rg.log.Debug("indexed new point", "id", point.ID, "lat", point.Lat, "lng", point.Lng, "geohash", point.Geohash)
 	return nil
 }
 
