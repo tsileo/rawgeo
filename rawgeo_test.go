@@ -51,26 +51,41 @@ func TestRawGeo(t *testing.T) {
 		Lat: 44.36810797040634,
 		Lng: 2.349014000000026,
 	}
-	nearParis := &Point{
+
+	p2 := &Point{
+		ID:  "40km",
+		Lat: 48.50498735763251,
+		Lng: 2.349014000000026,
+	}
+
+	p3 := &Point{
 		ID:  "50km",
 		Lat: 48.41505519704064,
 		Lng: 2.349014000000026,
 	}
 
-	check(tdb.Index(farFromParis))
-	check(tdb.Index(nearParis))
+	for _, p := range []*Point{farFromParis, p2, p3} {
+		check(tdb.Index(p))
+	}
 
-	res, err := tdb.Query(Paris.Lat, Paris.Lng, 60000)
+	res, err := tdb.Query(Paris.Lat, Paris.Lng, 45000)
 	check(err)
 
 	if len(res) != 1 {
 		t.Errorf("expected 1 results, got %d", len(res))
 	}
 
-	res, err = tdb.Query(Paris.Lat, Paris.Lng, 600000)
+	res, err = tdb.Query(Paris.Lat, Paris.Lng, 60000)
 	check(err)
 
 	if len(res) != 2 {
 		t.Errorf("expected 2 results, got %d", len(res))
+	}
+
+	res, err = tdb.Query(Paris.Lat, Paris.Lng, 600000)
+	check(err)
+
+	if len(res) != 3 {
+		t.Errorf("expected 3 results, got %d", len(res))
 	}
 }
