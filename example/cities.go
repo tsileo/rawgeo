@@ -62,8 +62,8 @@ func parseLocation(file string, db *rawgeo.RawGeo) error {
 
 }
 
-func search(lat, lon float64, db *rawgeo.RawGeo) ([]*rawgeo.Point, error) {
-	return db.Query(lat, lon, 8)
+func search(lat, lon, radius float64, db *rawgeo.RawGeo) ([]*rawgeo.Point, error) {
+	return db.Query(lat, lon, radius)
 }
 
 func main() {
@@ -76,7 +76,7 @@ func main() {
 	// 	panic(err)
 	// }
 	n := time.Now()
-	res, err := search(30.26715, -97.74306, db)
+	res, err := search(30.26715, -97.74306, 40, db)
 	took := time.Since(n)
 	fmt.Printf("took %v\n", took)
 	if res != nil && len(res) > 0 {
