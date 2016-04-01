@@ -114,7 +114,7 @@ func (rg *RawGeo) Destroy() error {
 }
 
 // Put index the given entry in the given index
-// (you have to cared about duplicate IDs)
+// (you have to care about duplicate IDs)
 func (rg *RawGeo) Index(point *Point) error {
 	// Ensure the entry contains a latitude and a longitude
 	if point.Lat == 0 || point.Lng == 0 {

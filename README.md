@@ -7,8 +7,9 @@ Building block for building geospatial indexes using geohashes.
 
 ## Features
 
-- Index (lat, lng, ID) data.
+- Use the Geohash algorithm to index data
+- Index (`lat`, `lng`, `ID`) data.
 - Index is stored in a [kv](https://github.com/cznic/kv) file.
-- Find nearest neighbors from `lag,lng` sorted by distance.
+- Find nearest neighbors from `lag`, `lng` within a given `radius` sorted by distance.
 - Don't designed to store data (should be handled by another component).
 
