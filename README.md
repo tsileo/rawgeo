@@ -1,7 +1,7 @@
 # RawGeo
 
-[![Build Status](https://travis-ci.org/tsileo/rawgeo.png?branch=master)](https://travis-ci.org/tsileo/rawgeo)
-&nbsp; &nbsp;[![Godoc Reference](https://godoc.org/github.com/tsileo/rawgeo?status.png)](https://godoc.org/github.com/tsileo/rawgeo)
+[![Build Status](https://travis-ci.org/tsileo/rawgeo.svg?branch=master)](https://travis-ci.org/tsileo/rawgeo)
+&nbsp; &nbsp;[![Godoc Reference](https://godoc.org/github.com/tsileo/rawgeo?status.svg)](https://godoc.org/github.com/tsileo/rawgeo)
 
 Building block for building geospatial indexes using geohashes.
 
