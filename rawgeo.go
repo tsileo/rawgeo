@@ -1,4 +1,4 @@
-package rawgeo
+package rawgeo // import "a4.io/rawgeo"
 
 import (
 	"bytes"
